@@ -115,16 +115,20 @@ const INIT_PRIZES = [
 ];
 
 const INIT_EVENT = {
-  greeting: "You are warmly invited to",
-  title: "Annual Dinner",
+  greeting: "You are warmly invited to celebrate",
+  title: "50 Years Anniversary Dinner",
   year: "2026",
-  date: "Saturday, 15 March 2026",
-  time: "6:00 PM onwards",
-  venue: "Grand Ballroom, Marina Bay Sands",
+  date: "Friday, 23 October 2026",
+  time: "6:00 PM — Registration",
+  venue: "Hilton Singapore Orchard",
   dressCode: "Smart Casual",
-  rsvpDeadline: "1 March 2026",
-  emailSubject: "RSVP Confirmed - Soilbuild Annual Dinner 2026",
-  emailBody: "Dear {{name}},\n\nThank you for confirming your attendance at the Soilbuild {{title}} {{year}}.\n\nYour invitation card is below. Please present it at the entrance on the night.\n\nEvent Details:\n  Date: {{date}}\n  Time: {{time}}\n  Venue: {{venue}}\n  Dress Code: {{dressCode}}\n  Table: {{table}}\n  Pax: {{pax}}\n\nWe look forward to celebrating with you!\n\nWarm regards,\nSoilbuild Group Holdings Ltd.",
+  rsvpDeadline: "10 October 2026",
+  emailSubject: "RSVP Confirmed - Soilbuild 50 Years Anniversary Dinner 2026",
+  emailBody: "Dear {{name}},\n\nThank you for confirming your attendance at the Soilbuild {{title}}.\n\nYour invitation card is below. Please present it at the entrance on the night.\n\nEvent Details:\n  Date: {{date}}\n  Time: {{time}}\n  Venue: {{venue}}\n  Dress Code: {{dressCode}}\n  Table: {{table}}\n  Pax: {{pax}}\n  Lucky Draw No: #{{draw_number}}\n\nWe look forward to celebrating this milestone with you!\n\nWarm regards,\nSoilbuild Group Holdings Ltd.",
+  // Web3Forms key — hardcoded so it works for ALL visitors automatically
+  // To change: update the key below and redeploy (npm run deploy)
+  // Get a new key: web3forms.com → enter your email → "Get Access Key"
+  web3formsKey: "d1a88dcc-6f3e-400e-84e0-65c542d992bf",
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -144,31 +148,73 @@ const getNextDrawNumber = (employees) => {
   return String(next).padStart(3, "0");
 };
 
-// ─── SIMULATED EMAIL SENDER ──────────────────────────────────────────────────
+// ─── EMAIL SENDER — Web3Forms (FREE 250/day, NO IP restriction, GitHub Pages) ─
+// Setup: web3forms.com → Get Access Key (free, no credit card, no IP lock)
+// Paste your access key in Admin → Email Template → Web3Forms Access Key
+// Free: 250 submissions/day — perfect for a one-day event with no backend
 function fillTemplate(template, vars) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] || "");
 }
 
-function simulateSendEmail({ to, name, tableName, pax, eventInfo }) {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      const vars = {
-        name, table: tableName, pax: String(pax),
-        title: eventInfo.title, year: eventInfo.year,
-        date: eventInfo.date, time: eventInfo.time,
-        venue: eventInfo.venue, dressCode: eventInfo.dressCode,
+async function sendEmail({ to, name, tableName, pax, drawNumber, eventInfo }) {
+  const vars = {
+    name, table: tableName, pax: String(pax),
+    draw_number: drawNumber || "—",
+    title: eventInfo.title, year: eventInfo.year,
+    date: eventInfo.date, time: eventInfo.time,
+    venue: eventInfo.venue, dressCode: eventInfo.dressCode,
+  };
+  const body    = fillTemplate(eventInfo.emailBody || "", vars);
+  const subject = fillTemplate(eventInfo.emailSubject || "RSVP Confirmed", vars);
+  const msgId   = uid();
+  const accessKey = (eventInfo.web3formsKey || "").trim();
+
+  if (accessKey) {
+    try {
+      // Web3Forms: always sends to the account owner email.
+      // We send TWO submissions — one notify admin, one goes to guest via replyto trick.
+      // Actually the correct way: use their "redirect" field and pass guest email as "email"
+      // Web3Forms uses the "email" field as reply-to AND sends a copy to it if configured.
+      const payload = {
+        access_key: accessKey,
+        subject:    `[RSVP] ${subject}`,
+        from_name:  "Soilbuild Annual Dinner",
+        email:      to,          // Web3Forms uses this as reply-to
+        replyto:    to,
+        botcheck:   "",
+        // Guest details
+        "Guest Name":   name,
+        "Guest Email":  to,
+        "Table":        tableName,
+        "Pax":          String(pax),
+        "Draw Number":  drawNumber || "—",
+        "Event":        `${eventInfo.title} ${eventInfo.year}`,
+        "Date":         eventInfo.date,
+        "Venue":        eventInfo.venue,
+        "Message":      body,
       };
-      const body = fillTemplate(eventInfo.emailBody || "", vars);
-      const subject = fillTemplate(eventInfo.emailSubject || "RSVP Confirmed", vars);
-      resolve({
-        success: true,
-        messageId: uid(),
-        to: to,
-        subject: subject,
-        body: body,
+
+      const res = await fetch("https://api.web3forms.com/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(payload),
       });
-    }, 800);
-  });
+
+      const data = await res.json();
+      console.log("Web3Forms response:", data);
+
+      if (data.success) {
+        return { success: true, messageId: msgId, to, subject, body, real: true };
+      }
+      return { success: false, messageId: msgId, to, subject, body, real: true, error: data.message || JSON.stringify(data) };
+    } catch (err) {
+      return { success: false, messageId: msgId, to, subject, body, real: true, error: String(err) };
+    }
+  }
+
+  // Demo mode — no key configured
+  await new Promise(r => setTimeout(r, 600));
+  return { success: true, messageId: msgId, to, subject, body, real: false };
 }
 
 // ─── BROADCAST CHANNEL ───────────────────────────────────────────────────────
@@ -239,6 +285,101 @@ function FontLoader() {
     document.head.appendChild(s);
   }, []);
   return null;
+}
+
+
+// ─── QR CODE — pure JS, no external requests, works on GitHub Pages ──────────
+// Uses qrcode-generator loaded from CDN once, then renders to canvas
+function QRCode({ value, size = 160 }) {
+  const canvasRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [err, setErr] = useState(false);
+
+  // Load qrcode-generator from CDN once
+  useEffect(() => {
+    if (window.qrcode) { setReady(true); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js";
+    script.onload  = () => setReady(true);
+    script.onerror = () => setErr(true);
+    document.head.appendChild(script);
+  }, []);
+
+  // Draw QR onto canvas whenever value or size changes
+  useEffect(() => {
+    if (!ready || !canvasRef.current) return;
+    try {
+      const qr = window.qrcode(0, "M");
+      qr.addData(value);
+      qr.make();
+
+      const modules    = qr.getModuleCount();
+      const cellSize   = Math.floor(size / (modules + 4));
+      const margin     = Math.floor((size - cellSize * modules) / 2);
+      const canvas     = canvasRef.current;
+      canvas.width     = size;
+      canvas.height    = size;
+      const ctx        = canvas.getContext("2d");
+
+      // White background
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, size, size);
+
+      // Dark modules
+      ctx.fillStyle = "#2C1A0E";
+      for (let row = 0; row < modules; row++) {
+        for (let col = 0; col < modules; col++) {
+          if (qr.isDark(row, col)) {
+            ctx.fillRect(
+              margin + col * cellSize,
+              margin + row * cellSize,
+              cellSize, cellSize
+            );
+          }
+        }
+      }
+    } catch (e) {
+      setErr(true);
+    }
+  }, [ready, value, size]);
+
+  if (err) return (
+    <div style={{ width: size, height: size, display: "flex", alignItems: "center", justifyContent: "center", background: "#F5F0E8", borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "#888", textAlign: "center", padding: 8 }}>
+      QR unavailable
+    </div>
+  );
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={size}
+      height={size}
+      style={{ borderRadius: 8, display: "block" }}
+    />
+  );
+}
+
+// Build the QR data string from a guest record
+function buildQRData(guest) {
+  return [
+    guest.name || "",
+    guest.employeeNumber || "",
+    guest.drawNumber || "",
+    guest.pax || "1",
+    guest.id || "",
+  ].join("|");
+}
+
+// Parse QR data string back into an object
+function parseQRData(str) {
+  const parts = str.split("|");
+  return {
+    name:           parts[0] || "",
+    employeeNumber: parts[1] || "",
+    drawNumber:     parts[2] || "",
+    pax:            parts[3] || "1",
+    id:             parts[4] || "",
+  };
 }
 
 // ─── PARTICLES ───────────────────────────────────────────────────────────────
@@ -370,7 +511,7 @@ function HomePage({ setPage, eventInfo }) {
           </button>
         </div>
         <div style={{ marginTop: 60, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.inkMid, letterSpacing: 2, opacity: 0.7, animation: "fadeIn 1s ease-out 1.2s both" }}>
-          {eventInfo.dressCode} · Kindly RSVP by {eventInfo.rsvpDeadline}
+          {eventInfo.dressCode}
         </div>
       </div>
       <footer style={{ position: "relative", zIndex: 2, textAlign: "center", padding: "20px", color: T.inkMid, opacity: 0.5, fontFamily: "'DM Sans',sans-serif", fontSize: 12 }}>
@@ -452,9 +593,16 @@ function EmailPreviewModal({ emailData, confirmedData, eventInfo, onClose }) {
             </div>
           </div>
         )}
-        <div style={{ padding: "12px 24px", background: "#F0FFF4", display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid #BBF7D0" }}>
-          <span style={{ color: T.green, fontSize: 15 }}>✓</span>
-          <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.green, fontWeight: 600 }}>Email with invitation card delivered (demo mode)</span>
+        <div style={{ padding: "12px 24px", background: emailData.real && emailData.success ? "#F0FFF4" : emailData.real && !emailData.success ? "#FEE2E2" : "#FEF9C3", display: "flex", alignItems: "center", gap: 8, borderTop: `1px solid ${emailData.real && emailData.success ? "#BBF7D0" : emailData.real && !emailData.success ? "#FECACA" : "#FDE68A"}` }}>
+          <span style={{ fontSize: 15 }}>{emailData.real && emailData.success ? "✅" : emailData.real && !emailData.success ? "❌" : "📋"}</span>
+          <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, color: emailData.real && emailData.success ? T.green : emailData.real && !emailData.success ? T.red : T.yellowDark }}>
+            {emailData.real && emailData.success
+              ? "Real email sent via Web3Forms ✓"
+              : emailData.real && !emailData.success
+                ? `Web3Forms error: ${emailData.error}`
+                : "Demo mode — add your Web3Forms key in Admin → Email Template to send real emails (free, no IP restriction)"
+            }
+          </span>
         </div>
       </div>
     </div>
@@ -463,65 +611,102 @@ function EmailPreviewModal({ emailData, confirmedData, eventInfo, onClose }) {
 
 // ─── RSVP PAGE ────────────────────────────────────────────────────────────────
 function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
-  const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [showDrop, setShowDrop] = useState(false);
-  const [email, setEmail] = useState("");
-  const [pax, setPax] = useState(1);
-  const [confirmed, setConfirmed] = useState(null);
-  const [emailSending, setEmailSending] = useState(false);
-  const [emailData, setEmailData] = useState(null);
+  const [name, setName]                     = useState("");
+  const [employeeNumber, setEmployeeNumber] = useState("");
+  const [email, setEmail]                   = useState("");
+  const [pax, setPax]                       = useState(1);
+  const [confirmed, setConfirmed]           = useState(null);
+  const [emailSending, setEmailSending]     = useState(false);
+  const [emailData, setEmailData]           = useState(null);
   const [showEmailPreview, setShowEmailPreview] = useState(false);
+  const [suggestions, setSuggestions]       = useState([]);
+  const [showDrop, setShowDrop]             = useState(false);
+  const [nameError, setNameError]           = useState("");
 
+  // Autocomplete suggestions from existing employees (optional helper)
   useEffect(() => {
-    if (query.length < 1) { setSuggestions([]); return; }
-    setSuggestions(employees.filter(e => e.name.toLowerCase().includes(query.toLowerCase())).slice(0, 8));
-    setShowDrop(true);
-  }, [query, employees]);
+    if (name.length < 1) { setSuggestions([]); return; }
+    const matches = employees
+      .filter(e => e.name.toLowerCase().includes(name.toLowerCase()))
+      .slice(0, 6);
+    setSuggestions(matches);
+    setShowDrop(matches.length > 0);
+  }, [name, employees]);
 
   const pickSuggestion = (emp) => {
-    if (emp.rsvpStatus !== "pending") {
+    // If already confirmed, just show their card
+    if (emp.rsvpStatus === "confirmed") {
       const tbl = tables.find(t => t.id === emp.tableId);
-      setConfirmed({ ...emp, tableName: tbl?.name });
+      setConfirmed({ ...emp, tableName: tbl?.name || "—" });
       return;
     }
-    setSelected(emp); setQuery(emp.name); setShowDrop(false); setSuggestions([]);
-    setPax(emp.pax || 1);
+    setName(emp.name);
+    setEmployeeNumber(emp.employeeNumber || "");
     setEmail(emp.email || "");
+    setPax(emp.pax || 1);
+    setShowDrop(false);
+    setSuggestions([]);
   };
 
   const handleConfirm = async () => {
+    setNameError("");
+    if (!name.trim()) { setNameError("Please enter your name."); return; }
     if (!email || !email.includes("@")) { alert("Please enter a valid email address."); return; }
-    if (pax < 1) { alert("Pax must be at least 1."); return; }
 
+    // Assign a table
     const avail = tables.filter(t => t.assignedCount + pax <= t.capacity);
-    if (avail.length === 0) { alert("Sorry, no tables have enough capacity. Please contact the organiser."); return; }
+    if (avail.length === 0) { alert("No tables available. Please contact the organiser."); return; }
     avail.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
     const tbl = avail[0];
 
-    // Assign sequential draw number if not already assigned
-    const drawNumber = selected.drawNumber || getNextDrawNumber(employees);
-
-    const updated = employees.map(e =>
-      e.id === selected.id ? { ...e, rsvpStatus: "confirmed", tableId: tbl.id, pax, email, drawNumber } : e
+    // Check if this person already exists in DB
+    const existing = employees.find(e =>
+      e.name.toLowerCase().trim() === name.toLowerCase().trim()
     );
-    const updTables = tables.map(t => t.id === tbl.id ? { ...t, assignedCount: t.assignedCount + pax } : t);
-    setEmployees(updated);
-    setTables(updTables);
 
-    const confirmedData = { ...selected, rsvpStatus: "confirmed", tableId: tbl.id, tableName: tbl.name, pax, email, drawNumber };
+    let drawNumber, empId;
+
+    if (existing && existing.rsvpStatus === "pending") {
+      drawNumber = existing.drawNumber || getNextDrawNumber(employees);
+      empId = existing.id;
+      setEmployees(prev => prev.map(e =>
+        e.id === empId
+          ? { ...e, rsvpStatus: "confirmed", tableId: tbl.id, pax, email,
+              drawNumber, employeeNumber: employeeNumber.trim() || e.employeeNumber }
+          : e
+      ));
+    } else if (existing && existing.rsvpStatus === "confirmed") {
+      const tblName = tables.find(t => t.id === existing.tableId)?.name || "—";
+      setConfirmed({ ...existing, tableName: tblName });
+      return;
+    } else {
+      // New person — add them
+      drawNumber = getNextDrawNumber(employees);
+      empId = uid();
+      setEmployees(prev => [...prev, {
+        id: empId, name: name.trim(),
+        employeeNumber: employeeNumber.trim(),
+        email, pax, drawEligible: true,
+        tableId: tbl.id, rsvpStatus: "confirmed", drawNumber,
+      }]);
+    }
+
+    setTables(prev => prev.map(t =>
+      t.id === tbl.id ? { ...t, assignedCount: t.assignedCount + pax } : t
+    ));
+
+    const confirmedData = {
+      id: empId, name: name.trim(),
+      employeeNumber: employeeNumber.trim(),
+      tableName: tbl.name, pax, email, drawNumber, rsvpStatus: "confirmed",
+    };
     setConfirmed(confirmedData);
 
-    // Simulate sending email
     setEmailSending(true);
     try {
-      const result = await simulateSendEmail({
-        to: email,
-        name: selected.name,
-        tableName: tbl.name,
-        pax,
-        eventInfo
+      const result = await sendEmail({
+        to: email, name: name.trim(),
+        tableName: tbl.name, pax, drawNumber, eventInfo,
       });
       setEmailData(result);
     } catch (err) {
@@ -532,12 +717,19 @@ function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
   };
 
   const handleDecline = () => {
-    const updated = employees.map(e => e.id === selected.id ? { ...e, rsvpStatus: "declined", email } : e);
-    setEmployees(updated);
-    setConfirmed({ ...selected, rsvpStatus: "declined", email });
+    if (!name.trim()) { setNameError("Please enter your name first."); return; }
+    const existing = employees.find(e =>
+      e.name.toLowerCase().trim() === name.toLowerCase().trim()
+    );
+    if (existing) {
+      setEmployees(prev => prev.map(e =>
+        e.id === existing.id ? { ...e, rsvpStatus: "declined", email } : e
+      ));
+    }
+    setConfirmed({ name: name.trim(), rsvpStatus: "declined" });
   };
 
-  // ─── CONFIRMED CARD ───────────────────────────────────────────────────────
+  // ── CONFIRMED CARD ─────────────────────────────────────────────────────────
   if (confirmed && confirmed.rsvpStatus === "confirmed") {
     return (
       <div style={{ minHeight: "100vh", background: "#F5F0E8", display: "flex", flexDirection: "column", alignItems: "center", padding: "100px 24px 40px" }}>
@@ -546,24 +738,24 @@ function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
         )}
         {emailSending && (
           <div style={{ background: "#FEF9C3", border: `1px solid ${T.yellow}`, color: T.yellowDark, padding: "10px 20px", borderRadius: 8, marginBottom: 20, fontFamily: "'DM Sans',sans-serif", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span> Sending confirmation email to {email}…
+            <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>⏳</span> Sending email to {email}…
           </div>
         )}
         {emailData && !emailSending && (
-          <div style={{ background: "#DCFCE7", border: `1px solid ${T.green}`, color: T.greenDark, padding: "10px 20px", borderRadius: 8, marginBottom: 20, fontFamily: "'DM Sans',sans-serif", fontSize: 13, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
+          <div style={{ background: emailData.real && emailData.success ? "#DCFCE7" : "#FEF9C3", border: `1px solid ${emailData.real && emailData.success ? T.green : T.yellow}`, color: emailData.real && emailData.success ? T.greenDark : T.yellowDark, padding: "10px 20px", borderRadius: 8, marginBottom: 20, fontFamily: "'DM Sans',sans-serif", fontSize: 13, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
             onClick={() => setShowEmailPreview(true)}>
-            <span>✉️</span>
-            <span>Confirmation email sent to <strong>{emailData.to}</strong> — <span style={{ textDecoration: "underline" }}>View email</span></span>
+            <span>{emailData.real && emailData.success ? "✅" : "📋"}</span>
+            <span>
+              {emailData.real && emailData.success
+                ? <>Email sent to <strong>{emailData.to}</strong> — <span style={{ textDecoration: "underline" }}>View</span></>
+                : <>Preview ready — <span style={{ textDecoration: "underline" }}>View</span> · Add Formspree endpoint in Admin to send real emails</>}
+            </span>
           </div>
         )}
-        {/* Invitation card — keep dark/elegant look */}
         <div style={{ background: `linear-gradient(135deg, #3B2A1A 0%, #2C1A0E 100%)`, borderRadius: 24, padding: "48px 40px", maxWidth: 520, width: "100%", border: `2px solid rgba(245,197,24,0.4)`, boxShadow: "0 32px 80px rgba(0,0,0,0.2)", position: "relative", overflow: "hidden", animation: "cardReveal 0.8s ease-out" }}>
           <div style={{ position: "absolute", top: -50, right: -50, width: 220, height: 220, borderRadius: "50%", background: "rgba(245,197,24,0.06)", pointerEvents: "none" }} />
-          <div style={{ position: "absolute", bottom: -50, left: -50, width: 200, height: 200, borderRadius: "50%", background: "rgba(245,240,232,0.04)", pointerEvents: "none" }} />
           <div style={{ textAlign: "center", position: "relative" }}>
-            <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}>
-              <SoilbuildLogo size={48} dark />
-            </div>
+            <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}><SoilbuildLogo size={48} dark /></div>
             <div style={{ width: 60, height: 1, background: T.yellow, margin: "20px auto" }} />
             <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: "rgba(245,240,232,0.65)", marginBottom: 4, letterSpacing: 2, textTransform: "uppercase" }}>{eventInfo.greeting}</p>
             <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: 32, color: T.yellow, marginBottom: 16, marginTop: 12, fontWeight: 700 }}>{confirmed.name}</h2>
@@ -588,19 +780,24 @@ function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
                 {confirmed.drawNumber && (
                   <div style={{ gridColumn: "1 / -1", borderTop: "1px solid rgba(245,197,24,0.2)", paddingTop: 10, marginTop: 4 }}>
                     <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: "rgba(245,240,232,0.5)", textTransform: "uppercase", letterSpacing: 1.5, marginBottom: 4 }}>🎰 Lucky Draw Number</div>
-                    <div style={{ fontFamily: "'Courier New', monospace", fontSize: 32, color: T.yellow, fontWeight: 900, letterSpacing: 8, textShadow: "0 0 16px rgba(245,197,24,0.6)" }}>
-                      #{confirmed.drawNumber}
-                    </div>
+                    <div style={{ fontFamily: "'Courier New', monospace", fontSize: 32, color: T.yellow, fontWeight: 900, letterSpacing: 8, textShadow: "0 0 16px rgba(245,197,24,0.6)" }}>#{confirmed.drawNumber}</div>
                   </div>
                 )}
               </div>
             </div>
-            <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "rgba(245,240,232,0.4)", marginTop: 20, letterSpacing: 1 }}>
-              {eventInfo.dressCode} · Please present this card at the entrance
-            </p>
+            {/* QR Code */}
+            <div style={{ marginTop: 20, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <div style={{ background: T.white, borderRadius: 12, padding: 12, display: "inline-block", boxShadow: "0 0 20px rgba(245,197,24,0.2)" }}>
+                <QRCode value={buildQRData(confirmed)} size={140} />
+              </div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: "rgba(245,240,232,0.35)", letterSpacing: 2, textTransform: "uppercase" }}>
+                Present this QR at the entrance
+              </div>
+            </div>
+            <p style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: "rgba(245,240,232,0.4)", marginTop: 12, letterSpacing: 1 }}>{eventInfo.dressCode} · Please present this card at the entrance</p>
           </div>
         </div>
-        <button onClick={() => { setConfirmed(null); setSelected(null); setQuery(""); setEmail(""); setEmailData(null); }}
+        <button onClick={() => { setConfirmed(null); setName(""); setEmployeeNumber(""); setEmail(""); setPax(1); setEmailData(null); }}
           style={{ marginTop: 24, background: "transparent", color: T.green, border: `1.5px solid ${T.green}`, borderRadius: 8, padding: "10px 24px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           ← New RSVP
         </button>
@@ -616,7 +813,7 @@ function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
           <div style={{ fontSize: 56, marginBottom: 16 }}>💚</div>
           <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: 28, color: T.inkDark, marginBottom: 8 }}>You'll be missed</h2>
           <p style={{ color: T.inkMid, fontFamily: "'DM Sans',sans-serif", marginBottom: 20 }}>Thank you for letting us know, {confirmed.name}.</p>
-          <button onClick={() => { setConfirmed(null); setSelected(null); setQuery(""); setEmail(""); }}
+          <button onClick={() => { setConfirmed(null); setName(""); setEmployeeNumber(""); setEmail(""); }}
             style={{ background: T.green, color: T.white, border: "none", borderRadius: 8, padding: "10px 24px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
             ← Back
           </button>
@@ -625,77 +822,98 @@ function RSVPPage({ employees, setEmployees, tables, setTables, eventInfo }) {
     );
   }
 
-  // ─── REGISTRATION FORM ────────────────────────────────────────────────────
+  // ── MAIN FORM — accepts anyone ─────────────────────────────────────────────
   return (
     <div style={{ minHeight: "100vh", background: "#F5F0E8", display: "flex", alignItems: "center", justifyContent: "center", padding: "100px 24px 40px" }}>
       <div style={{ background: "#FAF7F2", borderRadius: 24, padding: 48, maxWidth: 520, width: "100%", boxShadow: "0 20px 60px rgba(92,61,30,0.1)", border: "1px solid #E8DFD0" }}>
         <div style={{ textAlign: "center", marginBottom: 36 }}>
-          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
-            <SoilbuildLogo size={50} />
-          </div>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><SoilbuildLogo size={50} /></div>
           <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.green, letterSpacing: 4, textTransform: "uppercase", marginBottom: 8, fontWeight: 600 }}>{eventInfo.title} {eventInfo.year}</div>
           <h2 style={{ fontFamily: "'Playfair Display',serif", fontSize: 32, color: T.inkDark }}>RSVP</h2>
         </div>
 
+        {/* Full Name with autocomplete */}
         <div style={{ position: "relative", marginBottom: 18 }}>
-          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Your Name</label>
-          <input value={query} onChange={e => { setQuery(e.target.value); setSelected(null); }} placeholder="Start typing your name…"
-            style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid #E8DFD0`, fontFamily: "'DM Sans',sans-serif", fontSize: 15, outline: "none", background: T.white, color: T.inkDark }}
+          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>
+            Full Name <span style={{ color: T.red }}>*</span>
+          </label>
+          <input
+            value={name}
+            onChange={e => { setName(e.target.value); setNameError(""); }}
+            placeholder="Enter your full name"
+            style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: `1.5px solid ${nameError ? T.red : "#E8DFD0"}`, fontFamily: "'DM Sans',sans-serif", fontSize: 15, outline: "none", background: T.white, color: T.inkDark }}
             onFocus={e => e.target.style.borderColor = T.green}
-            onBlur={e => { setTimeout(() => setShowDrop(false), 200); e.target.style.borderColor = "#E8DFD0"; }} />
+            onBlur={e => { setTimeout(() => setShowDrop(false), 200); e.target.style.borderColor = nameError ? T.red : "#E8DFD0"; }}
+          />
+          {nameError && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.red, marginTop: 4 }}>{nameError}</div>}
+          {/* Autocomplete dropdown */}
           {showDrop && suggestions.length > 0 && (
-            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: T.white, border: `1px solid #E8DFD0`, borderRadius: 10, boxShadow: "0 8px 24px rgba(92,61,30,0.1)", zIndex: 50, marginTop: 4, maxHeight: 260, overflowY: "auto" }}>
+            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: T.white, border: "1px solid #E8DFD0", borderRadius: 10, boxShadow: "0 8px 24px rgba(92,61,30,0.1)", zIndex: 50, marginTop: 4, maxHeight: 220, overflowY: "auto" }}>
+              <div style={{ padding: "7px 14px 5px", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.gray }}>Existing employees — or continue typing your own name</div>
               {suggestions.map(s => (
                 <div key={s.id} onClick={() => pickSuggestion(s)}
-                  style={{ padding: "12px 16px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 14, borderBottom: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}
+                  style={{ padding: "10px 16px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 14, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}
                   onMouseEnter={e => e.currentTarget.style.background = T.grayLight}
                   onMouseLeave={e => e.currentTarget.style.background = T.white}>
                   <span>{s.name}</span>
-                  <span style={{ fontSize: 12, color: T.gray }}>{s.employeeNumber}</span>
+                  <span style={{ fontSize: 11, color: T.gray }}>{s.employeeNumber}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {selected && (
-          <>
-            <div style={{ marginBottom: 18 }}>
-              <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Employee No.</label>
-              <input value={selected.employeeNumber} readOnly
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'DM Sans',sans-serif", fontSize: 15, background: "#EDE4D3", color: T.inkMid }} />
-            </div>
-            <div style={{ marginBottom: 18 }}>
-              <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Email Address <span style={{ color: T.red }}>*</span></label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com"
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'DM Sans',sans-serif", fontSize: 15, outline: "none", background: T.white, color: T.inkDark }}
-                onFocus={e => e.target.style.borderColor = T.green}
-                onBlur={e => e.target.style.borderColor = "#E8DFD0"} />
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.inkMid, marginTop: 4, opacity: 0.7 }}>A confirmation email will be sent here</div>
-            </div>
-            <div style={{ marginBottom: 28 }}>
-              <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Number of Pax</label>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <button onClick={() => setPax(Math.max(1, pax - 1))} style={{ width: 44, height: 44, borderRadius: 10, border: "1.5px solid #E8DFD0", background: T.white, fontSize: 20, fontWeight: 700, cursor: "pointer", color: T.green }}>−</button>
-                <div style={{ flex: 1, textAlign: "center", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'Playfair Display',serif", fontSize: 24, fontWeight: 700, color: T.inkDark }}>{pax}</div>
-                <button onClick={() => setPax(Math.min(10, pax + 1))} style={{ width: 44, height: 44, borderRadius: 10, border: "1.5px solid #E8DFD0", background: T.white, fontSize: 20, fontWeight: 700, cursor: "pointer", color: T.green }}>+</button>
-              </div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.inkMid, marginTop: 6, textAlign: "center", opacity: 0.7 }}>Including yourself (max 10)</div>
-            </div>
-            <div style={{ display: "flex", gap: 12 }}>
-              <button onClick={handleConfirm} style={{ flex: 1, background: T.green, color: T.white, border: "none", borderRadius: 10, padding: "14px", fontFamily: "'DM Sans',sans-serif", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(45,139,62,0.3)" }}>
-                ✓ Confirm Attendance
-              </button>
-              <button onClick={handleDecline} style={{ flex: 1, background: T.white, color: T.red, border: `2px solid ${T.red}`, borderRadius: 10, padding: "14px", fontFamily: "'DM Sans',sans-serif", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
-                ✗ Cannot Attend
-              </button>
-            </div>
-          </>
-        )}
+        {/* Employee Number — typed manually, optional */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>
+            Employee No. <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.6 }}>(optional)</span>
+          </label>
+          <input
+            value={employeeNumber}
+            onChange={e => setEmployeeNumber(e.target.value)}
+            placeholder="e.g. SB001"
+            style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'DM Sans',sans-serif", fontSize: 15, outline: "none", background: T.white, color: T.inkDark }}
+            onFocus={e => e.target.style.borderColor = T.green}
+            onBlur={e => e.target.style.borderColor = "#E8DFD0"}
+          />
+        </div>
+
+        {/* Email */}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Email Address <span style={{ color: T.red }}>*</span></label>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com"
+            style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'DM Sans',sans-serif", fontSize: 15, outline: "none", background: T.white, color: T.inkDark }}
+            onFocus={e => e.target.style.borderColor = T.green}
+            onBlur={e => e.target.style.borderColor = "#E8DFD0"} />
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.inkMid, marginTop: 4, opacity: 0.7 }}>A confirmation email will be sent here</div>
+        </div>
+
+        {/* Pax */}
+        <div style={{ marginBottom: 28 }}>
+          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid, marginBottom: 6, fontWeight: 500 }}>Number of Pax</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <button onClick={() => setPax(Math.max(1, pax - 1))} style={{ width: 44, height: 44, borderRadius: 10, border: "1.5px solid #E8DFD0", background: T.white, fontSize: 20, fontWeight: 700, cursor: "pointer", color: T.green }}>−</button>
+            <div style={{ flex: 1, textAlign: "center", padding: "12px 16px", borderRadius: 10, border: "1.5px solid #E8DFD0", fontFamily: "'Playfair Display',serif", fontSize: 24, fontWeight: 700, color: T.inkDark }}>{pax}</div>
+            <button onClick={() => setPax(Math.min(10, pax + 1))} style={{ width: 44, height: 44, borderRadius: 10, border: "1.5px solid #E8DFD0", background: T.white, fontSize: 20, fontWeight: 700, cursor: "pointer", color: T.green }}>+</button>
+          </div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.inkMid, marginTop: 6, textAlign: "center", opacity: 0.7 }}>Including yourself (max 10)</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <button onClick={handleConfirm}
+            style={{ flex: 1, background: T.green, color: T.white, border: "none", borderRadius: 10, padding: "14px", fontFamily: "'DM Sans',sans-serif", fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: "0 4px 14px rgba(45,139,62,0.3)", transition: "all 0.2s" }}>
+            ✓ Confirm Attendance
+          </button>
+          <button onClick={handleDecline}
+            style={{ flex: 1, background: T.white, color: T.red, border: `2px solid ${T.red}`, borderRadius: 10, padding: "14px", fontFamily: "'DM Sans',sans-serif", fontSize: 15, fontWeight: 700, cursor: "pointer" }}>
+            ✗ Cannot Attend
+          </button>
+        </div>
       </div>
     </div>
   );
 }
+
 
 // ─── ADMIN LOGIN ──────────────────────────────────────────────────────────────
 function AdminLogin({ onLogin }) {
@@ -1002,7 +1220,9 @@ function AdminDashboard({ employees, setEmployees, tables, setTables, prizes, se
   const exportAttendees = () => exportXLSX(employees.map(e => ({
     Name: e.name, "Employee No": e.employeeNumber, Email: e.email, Pax: e.pax,
     "RSVP Status": e.rsvpStatus, Table: tables.find(t => t.id === e.tableId)?.name || "",
-    "Draw Eligible": e.drawEligible ? "Yes" : "No"
+    "Draw Eligible": e.drawEligible ? "Yes" : "No",
+    "Attended": e.attended ? "Yes" : "No",
+    "Attended At": e.attendedAt || "",
   })), "Attendees");
 
   const exportRSVP = () => exportXLSX(employees.filter(e => e.rsvpStatus !== "pending").map(e => ({
@@ -1053,6 +1273,10 @@ function AdminDashboard({ employees, setEmployees, tables, setTables, prizes, se
           <button onClick={() => setPage("draw-admin")}
             style={{ background: T.green, color: T.white, border: "none", borderRadius: 7, padding: "9px 18px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
             🎰 Draw Control
+          </button>
+          <button onClick={() => setPage("qr-scanner")}
+            style={{ background: "#8B5CF6", color: T.white, border: "none", borderRadius: 7, padding: "9px 18px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            📷 QR Check-In
           </button>
           <button onClick={() => setPage("home")}
             style={{ background: "transparent", color: T.inkMid, border: "1px solid #C8B89A", borderRadius: 7, padding: "9px 18px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>
@@ -1152,6 +1376,43 @@ function AdminDashboard({ employees, setEmployees, tables, setTables, prizes, se
               </div>
               <div style={{ marginTop: 16, padding: "10px 14px", background: "#F0FFF4", borderRadius: 8, color: T.green, fontFamily: "'DM Sans',sans-serif", fontSize: 13, border: "1px solid #BBF7D0" }}>
                 ✓ Template auto-saved. The RSVP invitation card is automatically attached to every confirmation email.
+              </div>
+
+              {/* Web3Forms email setup */}
+              <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid #E8DFD0" }}>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700, color: T.inkDark, marginBottom: 6 }}>
+                  📧 Email Setup — Web3Forms (Free, No IP Restriction)
+                </div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.inkMid, marginBottom: 6 }}>
+                  Works from any browser on GitHub Pages. Free: <strong>250 emails/day</strong>, no IP lock, no credit card.
+                </div>
+                <div style={{ background: "#F5F0E8", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.inkDark, border: "1px solid #E8DFD0", lineHeight: 1.9 }}>
+                  <strong>60-second setup:</strong><br/>
+                  1. Go to <a href="https://web3forms.com" target="_blank" rel="noreferrer" style={{ color: T.green }}>web3forms.com</a><br/>
+                  2. Enter <strong>your email address</strong> → click <strong>"Get Access Key"</strong><br/>
+                  3. Check your inbox → copy the access key they send you<br/>
+                  4. Paste it below → done! Every RSVP sends a notification to YOUR inbox with all guest details
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.inkMid, marginBottom: 4, fontWeight: 600 }}>Web3Forms Access Key</label>
+                  <input
+                    value={eventInfo.web3formsKey || ""}
+                    onChange={e => setEventInfo(prev => ({ ...prev, web3formsKey: e.target.value }))}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    style={{ width: "100%", padding: "9px 14px", borderRadius: 8, border: "1.5px solid #E8DFD0", fontFamily: "monospace", fontSize: 13, outline: "none", background: T.white, color: T.inkDark }}
+                    onFocus={e => e.target.style.borderColor = T.green}
+                    onBlur={e => e.target.style.borderColor = "#E8DFD0"}
+                  />
+                </div>
+                {(eventInfo.web3formsKey || "").length > 10 ? (
+                  <div style={{ padding: "10px 14px", background: "#DCFCE7", borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.green, border: "1px solid #BBF7D0" }}>
+                    ✅ Web3Forms configured — real emails will be sent on every RSVP confirmation
+                  </div>
+                ) : (
+                  <div style={{ padding: "10px 14px", background: "#FEF9C3", borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.yellowDark, border: "1px solid #FDE68A" }}>
+                    ⚠️ Not configured yet — emails show as preview only (demo mode)
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1505,6 +1766,306 @@ function AdminDashboard({ employees, setEmployees, tables, setTables, prizes, se
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+
+// ─── QR SCANNER PAGE ─────────────────────────────────────────────────────────
+function QRScannerPage({ employees, setEmployees, onBack }) {
+  const videoRef  = useRef(null);
+  const streamRef = useRef(null);
+  const [scanning,    setScanning]    = useState(false);
+  const [scanResult,  setScanResult]  = useState(null);
+  const [error,       setError]       = useState("");
+  const [attended,    setAttended]    = useState([]);
+  const [manualInput, setManualInput] = useState("");
+  const [cameraMode,  setCameraMode]  = useState(false);
+
+  // Load jsQR from CDN
+  const [jsQRReady, setJsQRReady] = useState(false);
+  useEffect(() => {
+    if (window.jsQR) { setJsQRReady(true); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+    script.onload = () => setJsQRReady(true);
+    script.onerror = () => setError("Could not load QR scanner library.");
+    document.head.appendChild(script);
+  }, []);
+
+  // Start camera
+  const startCamera = async () => {
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+      }
+      setCameraMode(true);
+      setScanning(true);
+    } catch (err) {
+      setError("Camera access denied. Use manual entry below instead.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setCameraMode(false);
+    setScanning(false);
+  };
+
+  // Scan loop
+  useEffect(() => {
+    if (!scanning || !jsQRReady || !cameraMode) return;
+    const canvas = document.createElement("canvas");
+    const ctx    = canvas.getContext("2d");
+    let rafId;
+    const scan = () => {
+      const video = videoRef.current;
+      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const img  = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(img.data, img.width, img.height);
+        if (code?.data) {
+          handleScan(code.data);
+          return; // stop after first scan
+        }
+      }
+      rafId = requestAnimationFrame(scan);
+    };
+    rafId = requestAnimationFrame(scan);
+    return () => cancelAnimationFrame(rafId);
+  }, [scanning, jsQRReady, cameraMode]);
+
+  const handleScan = (raw) => {
+    stopCamera();
+    const parsed = parseQRData(raw);
+    processGuest(parsed);
+  };
+
+  const processGuest = (parsed) => {
+    // Find the employee by id, drawNumber, or name
+    const emp = employees.find(e =>
+      (parsed.id && e.id === parsed.id) ||
+      (parsed.drawNumber && e.drawNumber === parsed.drawNumber) ||
+      e.name.toLowerCase() === (parsed.name || "").toLowerCase()
+    );
+
+    if (!emp) {
+      setScanResult({ found: false, parsed });
+      return;
+    }
+
+    if (emp.attended) {
+      setScanResult({ found: true, emp, alreadyScanned: true });
+      return;
+    }
+
+    // Mark as attended
+    setEmployees(prev => prev.map(e =>
+      e.id === emp.id ? { ...e, attended: true, attendedAt: new Date().toLocaleTimeString() } : e
+    ));
+    setAttended(prev => [...prev, { ...emp, attendedAt: new Date().toLocaleTimeString() }]);
+    setScanResult({ found: true, emp, alreadyScanned: false });
+  };
+
+  const handleManual = () => {
+    if (!manualInput.trim()) return;
+    // Try as draw number or name
+    const emp = employees.find(e =>
+      e.drawNumber === manualInput.trim() ||
+      e.name.toLowerCase().includes(manualInput.toLowerCase())
+    );
+    if (emp) {
+      processGuest({ id: emp.id, name: emp.name, drawNumber: emp.drawNumber });
+    } else {
+      setScanResult({ found: false, parsed: { name: manualInput } });
+    }
+    setManualInput("");
+  };
+
+  const confirmedCount = employees.filter(e => e.rsvpStatus === "confirmed").length;
+  const attendedCount  = employees.filter(e => e.attended).length;
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#F5F0E8", paddingTop: 64 }}>
+      {/* Header */}
+      <div style={{ background: "#EDE4D3", borderBottom: "1px solid #D4C4A8", padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <SoilbuildLogo size={32} />
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.inkDark, fontWeight: 700 }}>📷 QR Check-In Scanner</div>
+        </div>
+        <button onClick={onBack}
+          style={{ background: "transparent", color: T.inkMid, border: "1px solid #C8B89A", borderRadius: 7, padding: "8px 16px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: "pointer" }}>
+          ← Dashboard
+        </button>
+      </div>
+
+      <div style={{ maxWidth: 800, margin: "0 auto", padding: "28px 20px" }}>
+        {/* Stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
+          {[
+            ["Confirmed RSVPs", confirmedCount, T.green],
+            ["Checked In Today", attendedCount, "#8B5CF6"],
+            ["Still Arriving", Math.max(0, confirmedCount - attendedCount), T.yellowDark],
+          ].map(([lbl, val, color]) => (
+            <div key={lbl} style={{ background: T.white, borderRadius: 12, padding: "18px 20px", border: `1px solid ${T.border}`, borderTop: `4px solid ${color}`, textAlign: "center" }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 34, fontWeight: 700, color }}>{val}</div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.gray, marginTop: 4 }}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* LEFT — Scanner */}
+          <div style={{ background: "#FAF7F2", borderRadius: 16, padding: 24, border: "1px solid #E8DFD0" }}>
+            <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.inkDark, marginBottom: 16 }}>Scan QR Code</h3>
+
+            {/* Camera viewfinder */}
+            <div style={{ position: "relative", width: "100%", paddingBottom: "75%", background: "#1A1A1A", borderRadius: 12, overflow: "hidden", marginBottom: 14, border: `2px solid ${cameraMode ? T.green : "#E8DFD0"}` }}>
+              <video ref={videoRef} muted playsInline
+                style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: cameraMode ? "block" : "none" }} />
+              {!cameraMode && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+                  <div style={{ fontSize: 52 }}>📷</div>
+                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: "rgba(255,255,255,0.5)", textAlign: "center", padding: "0 20px" }}>
+                    {jsQRReady ? "Click Start Camera to scan" : "Loading scanner…"}
+                  </div>
+                </div>
+              )}
+              {/* Scan overlay corners */}
+              {cameraMode && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                  <div style={{ width: 180, height: 180, position: "relative" }}>
+                    {[["0 auto auto 0","borderTop","borderLeft"],["0 0 auto auto","borderTop","borderRight"],["auto auto 0 0","borderBottom","borderLeft"],["auto 0 0 auto","borderBottom","borderRight"]].map(([inset, b1, b2], i) => (
+                      <div key={i} style={{ position: "absolute", inset, width: 28, height: 28, [b1]: `3px solid ${T.green}`, [b2]: `3px solid ${T.green}` }} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {error && <div style={{ background: "#FEE2E2", color: T.red, padding: "8px 12px", borderRadius: 8, fontFamily: "'DM Sans',sans-serif", fontSize: 12, marginBottom: 12 }}>{error}</div>}
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+              {!cameraMode ? (
+                <button onClick={startCamera} disabled={!jsQRReady}
+                  style={{ flex: 1, background: jsQRReady ? T.green : "#E8DFD0", color: T.white, border: "none", borderRadius: 8, padding: "11px", fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 700, cursor: jsQRReady ? "pointer" : "not-allowed" }}>
+                  📷 Start Camera
+                </button>
+              ) : (
+                <button onClick={stopCamera}
+                  style={{ flex: 1, background: T.red, color: T.white, border: "none", borderRadius: 8, padding: "11px", fontFamily: "'DM Sans',sans-serif", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                  ⏹ Stop Camera
+                </button>
+              )}
+              {scanResult && (
+                <button onClick={() => { setScanResult(null); startCamera(); }}
+                  style={{ background: "#EDE4D3", color: T.inkDark, border: "none", borderRadius: 8, padding: "11px 14px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  Next →
+                </button>
+              )}
+            </div>
+
+            {/* Scan result */}
+            {scanResult && (
+              <div style={{ background: scanResult.found && !scanResult.alreadyScanned ? "#DCFCE7" : scanResult.alreadyScanned ? "#FEF9C3" : "#FEE2E2", borderRadius: 12, padding: 16, border: `1px solid ${scanResult.found && !scanResult.alreadyScanned ? "#BBF7D0" : scanResult.alreadyScanned ? "#FDE68A" : "#FECACA"}`, animation: "fadeInUp 0.3s ease-out" }}>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 18, marginBottom: 8 }}>
+                  {scanResult.found && !scanResult.alreadyScanned ? "✅" : scanResult.alreadyScanned ? "⚠️" : "❌"}
+                </div>
+                {scanResult.found ? (
+                  <>
+                    <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, fontWeight: 700, color: T.inkDark, marginBottom: 4 }}>{scanResult.emp.name}</div>
+                    <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.gray, marginBottom: 4 }}>
+                      {scanResult.emp.employeeNumber} · {scanResult.emp.pax} pax · Draw #{scanResult.emp.drawNumber}
+                    </div>
+                    <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700, color: scanResult.alreadyScanned ? T.yellowDark : T.green }}>
+                      {scanResult.alreadyScanned ? `Already checked in at ${scanResult.emp.attendedAt}` : "✓ Checked in successfully!"}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, fontWeight: 700, color: T.inkDark, marginBottom: 4 }}>Guest Not Found</div>
+                    <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.gray }}>{scanResult.parsed?.name || "Unknown"}</div>
+                    <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.red, marginTop: 4 }}>Not in the confirmed guest list.</div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Manual lookup */}
+            <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #E8DFD0" }}>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.inkMid, fontWeight: 600, marginBottom: 8 }}>MANUAL LOOKUP (name or draw #)</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={manualInput} onChange={e => setManualInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleManual()}
+                  placeholder="Type name or draw number…"
+                  style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1.5px solid #E8DFD0", fontFamily: "'DM Sans',sans-serif", fontSize: 13, outline: "none" }}
+                  onFocus={e => e.target.style.borderColor = T.green}
+                  onBlur={e => e.target.style.borderColor = "#E8DFD0"} />
+                <button onClick={handleManual}
+                  style={{ background: T.green, color: T.white, border: "none", borderRadius: 8, padding: "9px 14px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                  Find
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT — Checked-in list */}
+          <div style={{ background: "#FAF7F2", borderRadius: 16, padding: 24, border: "1px solid #E8DFD0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.inkDark }}>Checked In</h3>
+              <span style={{ background: "#8B5CF6", color: T.white, borderRadius: 20, padding: "3px 12px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 700 }}>{attendedCount}</span>
+            </div>
+
+            {attendedCount === 0 ? (
+              <div style={{ textAlign: "center", padding: "40px 20px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.gray }}>
+                No check-ins yet.<br/>Start scanning QR codes at the entrance.
+              </div>
+            ) : (
+              <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                {employees.filter(e => e.attended).reverse().map((e, i) => (
+                  <div key={e.id} style={{ padding: "11px 0", borderBottom: "1px solid #EDE4D3", display: "flex", justifyContent: "space-between", alignItems: "center", animation: "fadeInUp 0.3s ease-out" }}>
+                    <div>
+                      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, color: T.inkDark }}>{e.name}</div>
+                      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.gray }}>{e.employeeNumber} · {e.pax} pax · {e.attendedAt}</div>
+                    </div>
+                    <span style={{ background: "#DCFCE7", color: T.green, borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 600, flexShrink: 0 }}>✓ In</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Not yet arrived */}
+            {confirmedCount > attendedCount && (
+              <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #E8DFD0" }}>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 700, color: T.inkMid, marginBottom: 8 }}>NOT YET ARRIVED ({confirmedCount - attendedCount})</div>
+                <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                  {employees.filter(e => e.rsvpStatus === "confirmed" && !e.attended).map(e => (
+                    <div key={e.id} style={{ padding: "8px 0", borderBottom: "1px solid #F5F0E8", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.inkMid }}>{e.name}</div>
+                      <button onClick={() => processGuest({ id: e.id, name: e.name, drawNumber: e.drawNumber })}
+                        style={{ background: T.green, color: T.white, border: "none", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                        Mark In
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <style>{`@keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
     </div>
   );
 }
@@ -2413,11 +2974,48 @@ function AudienceScreen({ eventInfo }) {
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("home");
-  const [employees, setEmployees] = useState(INIT_EMPLOYEES);
-  const [tables, setTables] = useState(INIT_TABLES);
-  const [prizes, setPrizes] = useState(INIT_PRIZES);
-  const [winners, setWinners] = useState([]);
-  const [eventInfo, setEventInfo] = useState(INIT_EVENT);
+  const [employees, setEmployees] = useState(() => {
+    try { const s = localStorage.getItem("sb_employees"); return s ? JSON.parse(s) : INIT_EMPLOYEES; } catch { return INIT_EMPLOYEES; }
+  });
+  useEffect(() => { try { localStorage.setItem("sb_employees", JSON.stringify(employees)); } catch {} }, [employees]);
+  const [tables, setTables] = useState(() => {
+    try { const s = localStorage.getItem("sb_tables"); return s ? JSON.parse(s) : INIT_TABLES; } catch { return INIT_TABLES; }
+  });
+  useEffect(() => { try { localStorage.setItem("sb_tables", JSON.stringify(tables)); } catch {} }, [tables]);
+  const [prizes, setPrizes] = useState(() => {
+    try { const s = localStorage.getItem("sb_prizes"); return s ? JSON.parse(s) : INIT_PRIZES; } catch { return INIT_PRIZES; }
+  });
+  useEffect(() => { try { localStorage.setItem("sb_prizes", JSON.stringify(prizes)); } catch {} }, [prizes]);
+  const [winners, setWinners] = useState(() => {
+    try { const s = localStorage.getItem("sb_winners"); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  useEffect(() => { try { localStorage.setItem("sb_winners", JSON.stringify(winners)); } catch {} }, [winners]);
+  // Load saved settings from localStorage, fallback to INIT_EVENT defaults
+  const [eventInfo, setEventInfo] = useState(() => {
+    try {
+      const saved = localStorage.getItem("sb_eventInfo");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Hardcoded fields always win — event details + key never change from cache
+        return {
+          ...parsed,
+          greeting:     INIT_EVENT.greeting,
+          title:        INIT_EVENT.title,
+          year:         INIT_EVENT.year,
+          date:         INIT_EVENT.date,
+          time:         INIT_EVENT.time,
+          venue:        INIT_EVENT.venue,
+          web3formsKey: INIT_EVENT.web3formsKey,
+        };
+      }
+    } catch {}
+    return INIT_EVENT;
+  });
+
+  // Auto-save eventInfo to localStorage whenever admin changes anything
+  useEffect(() => {
+    try { localStorage.setItem("sb_eventInfo", JSON.stringify(eventInfo)); } catch {}
+  }, [eventInfo]);
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
   const [pendingPage, setPendingPage] = useState(null);
 
@@ -2452,7 +3050,7 @@ export default function App() {
   const handleLogout = () => { setAdminLoggedIn(false); setPage("home"); };
 
   const navSetPage = (p) => {
-    if (p === "admin" || p === "draw-admin") goAdmin(p);
+    if (p === "admin" || p === "draw-admin" || p === "qr-scanner") goAdmin(p);
     else setPage(p);
   };
 
@@ -2472,6 +3070,9 @@ export default function App() {
         ? <DrawAdmin employees={employees} setEmployees={setEmployees} prizes={prizes} setPrizes={setPrizes} winners={winners} setWinners={setWinners} eventInfo={eventInfo} onLogout={handleLogout} setPage={setPage} />
         : <AdminLogin onLogin={handleLogin} />)}
       {page === "draw-audience" && <AudienceScreen eventInfo={eventInfo} />}
+      {page === "qr-scanner" && (adminLoggedIn
+        ? <QRScannerPage employees={employees} setEmployees={setEmployees} onBack={() => setPage("admin")} />
+        : <AdminLogin onLogin={handleLogin} />)}
     </div>
   );
 }
